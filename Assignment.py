@@ -6,6 +6,8 @@ Assignment.py — Multi-Agent Chat (Ollama primary + optional ChatGPT fallback) 
 - Vector Memory (TF-IDF by default; optional Ollama embeddings)
 - Interactive chat by default (scenarios behind --scenarios)
 - Real tool: openai_search (uses ChatGPT API if OPENAI_API_KEY is set)
+- NEW: conversation_search tool to recall recent chat
+- NEW: every Q&A turn auto-saved into knowledge_base for long-term recall
 - Strict stripping of <think> blocks; banner shows "[thinking hidden]"
 - Title bar shows agent name(s) for every reply
 - UTC-safe timestamps; extended generation length
@@ -42,10 +44,27 @@ OLLAMA_BASE = os.environ.get("OLLAMA_BASE", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "")  # e.g., "nomic-embed-text" if pulled in Ollama
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  # optional; enables ChatGPT fallback + openai_search tool
+def load_openai_key() -> str:
+    # 1. Environment variable (either spelling)
+    k = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAPI_KEY")
+    if k:
+        return k.strip()
+    # 2. key.txt file (in same folder as script)
+    key_path = os.path.join(os.path.dirname(__file__), "key.txt")
+    if os.path.exists(key_path):
+        with open(key_path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
+
+OPENAI_API_KEY = load_openai_key()
+
+
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 BRIEF = os.environ.get("BRIEF", "1") == "1"
+
+
+
 
 DEFAULT_SYSTEM_PREFIX = (
   "You are a precise assistant.\n"
@@ -88,7 +107,21 @@ def had_think(text: str) -> bool:
 
 def looks_like_tool_intent(text: str) -> bool:
     # model talked about tools but did not produce pure JSON
-    return bool(re.search(r'\b(memory_search|mock_search|openai_search|calculator|tool_name)\b', text, flags=re.I))
+    return bool(re.search(r'\b(memory_search|mock_search|openai_search|conversation_search|calculator|tool_name)\b', text, flags=re.I))
+
+def safe_snip(txt, n=240):
+    t = txt.replace("\n", " ")
+    return (t[:n] + "…") if len(t) > n else t
+
+def conv_search(memory, query: str, window: int = 80) -> List[Dict[str, str]]:
+    """Search recent conversation turns for keywords; newest first."""
+    q = query.lower().split()
+    hits = []
+    for m in reversed(memory.conversation[-window:]):  # recent-first
+        score = sum(t in m["content"].lower() for t in q)
+        if score > 0:
+            hits.append({"ts": m["ts"], "role": m["role"], "content": safe_snip(m["content"], 300)})
+    return hits
 
 # =========================
 #   Tools
@@ -501,6 +534,15 @@ class Coordinator:
         final_answer = strip_think(final_answer)  # final safety
         self.memory.add_conv("assistant", final_answer)
 
+        # Auto-save each Q&A into KB for future recall
+        self.memory.add_kb(
+            topic=f"conversation:{short_id()}",
+            text=f"Q: {query}\nA: {final_answer}",
+            source="conversation",
+            agent="Coordinator",
+            confidence=0.7
+        )
+
         if "analysis" in context:
             self.memory.add_kb(topic="analysis", text=context["analysis"], source="coordinator", agent="Coordinator", confidence=0.75)
         elif "research" in context:
@@ -527,7 +569,7 @@ class Coordinator:
         return strip_think("\n".join(buf))
 
 # =========================
-#   DI wiring (incl. real OpenAI tool)
+#   DI wiring (incl. real OpenAI tool + conversation_search)
 # =========================
 def build_system() -> Tuple['Coordinator', 'ToolRegistry', 'MemoryLayer']:
     embedder: Embedder = OllamaEmbedder(OLLAMA_EMBED_MODEL) if OLLAMA_EMBED_MODEL else TFIDFEmbedder()
@@ -544,6 +586,13 @@ def build_system() -> Tuple['Coordinator', 'ToolRegistry', 'MemoryLayer']:
             res = memory.search_kb_vector(query, top_k=top_k)
         return {"ok": True, "results": res}
     tools.register("memory_search", tool_memory_search, desc="Search memory (keyword/vector)")
+
+    # NEW: conversation_search tool (search recent chat)
+    def tool_conversation_search(query: str, window: int = 80) -> Dict[str, Any]:
+        res = conv_search(memory, query, window=window)
+        return {"ok": True, "results": res}
+    tools.register("conversation_search", tool_conversation_search,
+                   desc="Search recent conversation turns for matching context")
 
     # REAL tool via ChatGPT (search/summarize)
     def tool_openai_search(query: str, max_tokens: int = 300) -> Dict[str, Any]:
@@ -588,7 +637,9 @@ def build_system() -> Tuple['Coordinator', 'ToolRegistry', 'MemoryLayer']:
     ) + policy
     memory_prompt = (
         "You are MemoryAgent. Recall/summarize from memory. Tools:\n"
+        "- conversation_search(query, window)\n"
         "- memory_search(query, top_k, mode)\n"
+        "Recall policy: First search recent conversation with conversation_search; if empty, fall back to memory_search."
     ) + policy
 
     llm = LLMRouter(system_prompt=DEFAULT_SYSTEM_PREFIX)
