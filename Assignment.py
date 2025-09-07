@@ -760,7 +760,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # default: interactive chat
-    print("Interactive chat (memory in-session{}). Type 'exit' to quit."
+    print("Interactive chat (memory in-session{}). Type 'exit' to quit. Demo to run use cases."
           .format(" + persisted to state.json" if args.persist else ""))
 
     while True:
@@ -768,6 +768,8 @@ if __name__ == "__main__":
             q = input("\nYou: ").strip()
             if q.lower() in ("exit", "quit"):
                 break
+            elif q.lower() == "demo":
+                run_scenarios()
             log_event("user", q)
             res = coord.handle_query(q)
             render_boxed(res.get("agent_names","Agent"), res.get("thinking_hidden", False), res["final"])
