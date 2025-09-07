@@ -1,0 +1,44 @@
+Simple Query
+Query: What are the main types of neural networks?
+
+Trace:
+{
+  "task_id": "a1f0df69",
+  "selected": [
+    "ResearchAgent",
+    "AnalysisAgent",
+    "MemoryAgent"
+  ],
+  "ts": "2025-09-07T11:44:49.269106Z"
+}
+
+Agent Answers:
+
+[HybridAgent(All)] (conf=0.80)
+<think>
+Okay, the user is asking about the main types of neural networks. Let me think about what I know.
+
+First, I recall that neural networks are categorized into different types based on their architecture and purpose. The most common ones include feedforward networks, convolutional neural networks (CNNs), recurrent neural networks (RNNs), and transformers. 
+
+Wait, but I should check if there's a standard list. Maybe the user expects the top 4-5 types. Let me see. Feedforward is the basic one where data moves in one direction. CNNs are used for image processing. RNNs handle sequential data like time series or text. Transformers are more recent, used in NLP tasks with self-attention mechanisms.
+
+I don't think I need to call any tools here because this is standard knowledge. The ResearchAgent's mock_search might be overkill since the answer is well-established. The AnalysisAgent and MemoryAgent tools aren't necessary here either. 
+
+So the TL;DR should be a sentence listing the main types concisely. Then bullets for each type with a brief description. Let me make sure I don't add extra info. Keep it to 5 bullets max.
+
+Wait, the user said "main types". Sometimes people include
+
+
+Final:
+<think>
+Okay, the user is asking about the main types of neural networks. Let me think about what I know.
+
+First, I recall that neural networks are categorized into different types based on their architecture and purpose. The most common ones include feedforward networks, convolutional neural networks (CNNs), recurrent neural networks (RNNs), and transformers. 
+
+Wait, but I should check if there's a standard list. Maybe the user expects the top 4-5 types. Let me see. Feedforward is the basic one where data moves in one direction. CNNs are used for image processing. RNNs handle sequential data like time series or text. Transformers are more recent, used in NLP tasks with self-attention mechanisms.
+
+I don't think I need to call any tools here because this is standard knowledge. The ResearchAgent's mock_search might be overkill since the answer is well-established. The AnalysisAgent and MemoryAgent tools aren't necessary here either. 
+
+So the TL;DR should be a sentence listing the main types concisely. Then bullets for each type with a brief description. Let me make sure I don't add extra info. Keep it to 5 bullets max.
+
+Wait, the user said "main types". Sometimes people include
