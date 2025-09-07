@@ -3,60 +3,28 @@ Query: What are the main types of neural networks?
 
 Trace:
 {
-  "task_id": "5b326401",
+  "task_id": "9f165be4",
   "selected": [
     "ResearchAgent",
     "AnalysisAgent",
     "MemoryAgent"
   ],
-  "ts": "2025-09-07T13:12:12.236356+00:00"
+  "ts": "2025-09-07T20:57:01.752450+00:00"
 }
 
 Agent Answers:
 
 [HybridAgent(All)] (conf=0.80)
-The main types of neural networks include:
-
-1. **Feedforward Neural Networks (FNN)**: 
-   - Data moves in one direction, from input to output.
-   - Commonly used for classification tasks.
-
-2. **Convolutional Neural Networks (CNN)**: 
-   - Primarily used for image processing.
-   - Utilizes convolutional layers to detect patterns.
-
-3. **Recurrent Neural Networks (RNN)**: 
-   - Designed for sequential data, like time series or text.
-   - Maintains a memory of previous inputs.
-
-4. **Long Short-Term Memory Networks (LSTM)**: 
-   - A type of RNN that can learn long-term dependencies.
-   - Effective for tasks like language modeling.
-
-5. **Generative Adversarial Networks (GAN)**: 
-   - Consists of two networks (generator and discriminator).
-   - Used for generating new data samples.
+The primary neural network architectures include feedforward networks, convolutional networks, recurrent networks, and transformers.  
+- Feedforward Neural Networks (MLPs): Multi-layered networks with directed data flow.  
+- Convolutional Neural Networks (CNNs): Specialized for image/video processing using convolutional layers.  
+- Recurrent Neural Networks (RNNs): Handle sequential data with loops that maintain state.  
+- Transformers: Use self-attention mechanisms, dominant in NLP (e.g., BERT, GPT).
 
 
 Final:
-The main types of neural networks include:
-
-1. **Feedforward Neural Networks (FNN)**: 
-   - Data moves in one direction, from input to output.
-   - Commonly used for classification tasks.
-
-2. **Convolutional Neural Networks (CNN)**: 
-   - Primarily used for image processing.
-   - Utilizes convolutional layers to detect patterns.
-
-3. **Recurrent Neural Networks (RNN)**: 
-   - Designed for sequential data, like time series or text.
-   - Maintains a memory of previous inputs.
-
-4. **Long Short-Term Memory Networks (LSTM)**: 
-   - A type of RNN that can learn long-term dependencies.
-   - Effective for tasks like language modeling.
-
-5. **Generative Adversarial Networks (GAN)**: 
-   - Consists of two networks (generator and discriminator).
-   - Used for generating new data samples.
+The primary neural network architectures include feedforward networks, convolutional networks, recurrent networks, and transformers.  
+- Feedforward Neural Networks (MLPs): Multi-layered networks with directed data flow.  
+- Convolutional Neural Networks (CNNs): Specialized for image/video processing using convolutional layers.  
+- Recurrent Neural Networks (RNNs): Handle sequential data with loops that maintain state.  
+- Transformers: Use self-attention mechanisms, dominant in NLP (e.g., BERT, GPT).

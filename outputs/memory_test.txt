@@ -3,18 +3,26 @@ Query: What did we discuss about neural networks earlier?
 
 Trace:
 {
-  "task_id": "780b8b0f",
+  "task_id": "a6e9394b",
   "selected": [
     "MemoryAgent"
   ],
-  "ts": "2025-09-07T13:12:38.433235+00:00"
+  "ts": "2025-09-07T20:59:06.001888+00:00"
 }
 
 Agent Answers:
 
 [MemoryAgent] (conf=0.80)
-[fallback] {"ok": true, "results": [{"ts": "2025-09-07T13:12:38.433212+00:00", "role": "user", "content": "What did we discuss about neural networks earlier?"}, {"ts": "2025-09-07T13:12:22.778559+00:00", "role": "assistant", "content": "The main types of neural networks include:  1. **Feedforward Neural Networks (FNN)**:     - Data moves in one direction, from input to output.    - Commonly used for classification tasks.  2. **Convolutional Neural Networks (CNN)**:     - Primarily used for image processing.    - Utilizes convolutio\u2026"}, {"ts": "2025-09-07T13:12:12.236304+00:00", "role": "user", "content": "What are the main types of neural networks?"}]}
+The primary neural network architectures discussed include:  
+1. Feedforward Neural Networks (MLPs): Multi-layered networks with directed data flow.  
+2. Convolutional Neural Networks (CNNs): Specialized for image/video processing.  
+3. Recurrent Neural Networks (RNNs): Handle sequential data with memory-like structures.  
+4. Transformers: Foundation for modern NLP tasks using self-attention mechanisms.
 
 
 Final:
-[fallback] {"ok": true, "results": [{"ts": "2025-09-07T13:12:38.433212+00:00", "role": "user", "content": "What did we discuss about neural networks earlier?"}, {"ts": "2025-09-07T13:12:22.778559+00:00", "role": "assistant", "content": "The main types of neural networks include:  1. **Feedforward Neural Networks (FNN)**:     - Data moves in one direction, from input to output.    - Commonly used for classification tasks.  2. **Convolutional Neural Networks (CNN)**:     - Primarily used for image processing.    - Utilizes convolutio\u2026"}, {"ts": "2025-09-07T13:12:12.236304+00:00", "role": "user", "content": "What are the main types of neural networks?"}]}
+The primary neural network architectures discussed include:  
+1. Feedforward Neural Networks (MLPs): Multi-layered networks with directed data flow.  
+2. Convolutional Neural Networks (CNNs): Specialized for image/video processing.  
+3. Recurrent Neural Networks (RNNs): Handle sequential data with memory-like structures.  
+4. Transformers: Foundation for modern NLP tasks using self-attention mechanisms.

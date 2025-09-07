@@ -42,7 +42,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 # =========================
 OLLAMA_BASE = os.environ.get("OLLAMA_BASE", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
-OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "")  # e.g., "nomic-embed-text" if pulled in Ollama
+OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")  # e.g., "nomic-embed-text" if pulled in Ollama
 
 def load_openai_key() -> str:
     # 1. Environment variable (either spelling)
