@@ -1,65 +1,65 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Multi-Agent Chat System (Ollama primary + optional ChatGPT fallback) with Tool Calling, DI, Hybrid Agents, and Vector Memory.
-
-- Agents: ResearchAgent, AnalysisAgent, MemoryAgent, plus HybridAgent
-- Coordinator: routes/merges outputs, maintains context
-- Memory: conversation history, KB, agent state + keyword + vector search
-- LLM backends: Ollama (local) first; optional ChatGPT if OPENAI_API_KEY is set
-- Tool calling: model responds with a pure JSON object {"tool_name": "...", "arguments": {...}} when it needs a tool
-- Output style: TL;DR + up to 5 bullets; minimal reasoning shown
+r"""
+Assignment.py — Multi-Agent Chat (Ollama primary + optional ChatGPT fallback) with Tool Calling, DI, Hybrid Agents, Vector Memory,
+interactive chat by default, and a real OpenAI-powered search tool.
 
 Run:
-  1) Ensure Ollama is running and model is present:  ollama pull qwen3:4b
-  2) Install deps:  python -m pip install -r requirements.txt
-  3) python multi_agent_system.py           # runs 5 demo scenarios
-     python multi_agent_system.py --chat    # interactive
+  # 1) install deps in the exact interpreter you use:
+  C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe -m pip install -r requirements.txt
 
-Env:
-  OLLAMA_BASE   (default http://localhost:11434)
-  OLLAMA_MODEL  (default qwen3:4b)
-  OPENAI_API_KEY (optional; enables ChatGPT fallback)
-  BRIEF=1 (default) to enforce concise style
-  OLLAMA_EMBED_MODEL (optional; e.g., "nomic-embed-text")
+  # 2) ensure Ollama is running and model pulled
+  ollama pull qwen3:4b
+  $env:OLLAMA_MODEL="qwen3:4b"
+
+  # 3) (optional) ChatGPT fallback + openai_search tool
+  $env:OPENAI_API_KEY="sk-proj-..."  # rotate/regenerate a new key!
+
+  # 4) start chat (default)
+  C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe .\Assignment.py --persist --log chat.jsonl
+
+  # or single-shot
+  C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe .\Assignment.py --once "what is a transformer?"
+
+  # or the original 5 demo scenarios
+  C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe .\Assignment.py --scenarios
 """
 
 import os
 import sys
+import re
 import json
-import time
 import uuid
 import traceback
 import datetime as dt
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import requests
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-
-import requests
 
 # =========================
 #   Config / Defaults
 # =========================
 OLLAMA_BASE = os.environ.get("OLLAMA_BASE", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
-OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "")  # e.g., "nomic-embed-text" if you have it
+OLLAMA_EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "")  # e.g., "nomic-embed-text" if pulled in Ollama
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  # optional fallback
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")    # small+cheap, change if you like
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")  # optional; enables ChatGPT fallback + openai_search tool
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 BRIEF = os.environ.get("BRIEF", "1") == "1"
 
 DEFAULT_SYSTEM_PREFIX = (
-  "You are a precise assistant. If you need a tool, reply with a pure JSON ONLY: "
-  "{\"tool_name\":\"<name>\",\"arguments\":{...}}. Never mix text with that JSON. "
-  "Otherwise, answer concisely:\n"
-  "• Start with one TL;DR sentence.\n"
-  "• Then up to 5 short bullets with concrete steps/results.\n"
-  "• No chain-of-thought, no self-reference, no long preambles.\n"
-  "• Prefer lists, code blocks, and exact commands over prose.\n"
-  "• If user wants more detail, they will ask.\n"
+  "You are a precise assistant.\n"
+  "TOOL CALLS:\n"
+  "- If you need a tool, reply with a PURE JSON object ONLY: "
+  "{\"tool_name\":\"<name>\",\"arguments\":{...}}. No surrounding text, no markdown, no commentary.\n"
+  "- If you are NOT calling a tool, reply with a short answer: 1 TL;DR sentence + up to 5 bullets.\n"
+  "HARD RULES:\n"
+  "- Never output chain-of-thought, analysis, or meta-reasoning. Do NOT output <think> blocks or inner thoughts. Think silently.\n"
+  "- Do not mention that you considered tools; either call them in JSON or answer briefly.\n"
 )
 
 STYLE_GUIDE = (
@@ -74,13 +74,22 @@ STYLE_GUIDE = (
 #   Utilities / Tracing
 # =========================
 def now_ts() -> str:
-    return dt.datetime.utcnow().isoformat() + "Z"
+    # timezone-aware UTC
+    return dt.datetime.now(dt.timezone.utc).isoformat()
 
 def short_id() -> str:
     return uuid.uuid4().hex[:8]
 
 def jprint(obj):
     print(json.dumps(obj, indent=2, ensure_ascii=False))
+
+def strip_think(text: str) -> str:
+    # remove <think>...</think> (any casing) if model leaks thoughts
+    return re.sub(r'<think\b[^>]*>.*?</think>\s*', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+def looks_like_tool_intent(text: str) -> bool:
+    # model talked about tools but did not produce pure JSON
+    return bool(re.search(r'\b(memory_search|mock_search|openai_search|calculator|tool_name)\b', text, flags=re.I))
 
 # =========================
 #   Tools
@@ -91,13 +100,10 @@ class ToolError(Exception):
 class ToolRegistry:
     def __init__(self):
         self._tools = {}
-
     def register(self, name: str, func, schema: Optional[Dict] = None, desc: str = ""):
         self._tools[name] = {"func": func, "schema": schema or {}, "desc": desc}
-
     def list_tools(self) -> Dict[str, Dict]:
         return self._tools
-
     def call(self, name: str, arguments: Dict[str, Any]) -> Any:
         if name not in self._tools:
             raise ToolError(f"Unknown tool: {name}")
@@ -167,7 +173,6 @@ class OllamaEmbedder(Embedder):
                 data = r.json()
                 vecs.append(np.array(data["embedding"], dtype=np.float32))
             except Exception:
-                # deterministic hash-ish fallback
                 vecs.append(self._hash_vec(t))
         return np.vstack(vecs)
     def _hash_vec(self, s: str, dim: int = 384) -> np.ndarray:
@@ -231,10 +236,8 @@ class LLMResponse:
 class BaseLLM:
     def __init__(self, system_prompt: str = DEFAULT_SYSTEM_PREFIX):
         self.system_prompt = system_prompt
-
     def generate(self, messages: List[Dict[str, str]]) -> LLMResponse:
         raise NotImplementedError
-
     def _maybe_parse_tool(self, text: str) -> Optional[Dict[str, Any]]:
         try:
             txt = text.strip()
@@ -251,7 +254,6 @@ class OllamaLLM(BaseLLM):
         super().__init__(system_prompt)
         self.model = model
         self.base = base
-
     def generate(self, messages: List[Dict[str, str]]) -> LLMResponse:
         payload = {
             "model": self.model,
@@ -279,7 +281,6 @@ class ChatGPTLLM(BaseLLM):
         super().__init__(system_prompt)
         self.model = model
         self.api_key = api_key
-
     def generate(self, messages: List[Dict[str, str]]) -> LLMResponse:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY not set")
@@ -305,7 +306,6 @@ class LLMRouter(BaseLLM):
         self.backends: List[BaseLLM] = [OllamaLLM(system_prompt=system_prompt)]
         if OPENAI_API_KEY:
             self.backends.append(ChatGPTLLM(system_prompt=system_prompt))
-
     def generate(self, messages: List[Dict[str, str]]) -> LLMResponse:
         last_err = None
         for be in self.backends:
@@ -337,19 +337,29 @@ class Agent:
         return 0.8
 
     def run(self, task_id: str, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        messages = [
-            {"role": "system", "content": self.role_prompt},
-        ]
+        messages = [{"role": "system", "content": self.role_prompt}]
         if BRIEF:
             messages.append({"role": "system", "content": STYLE_GUIDE})
         messages.append({"role": "user", "content": query})
 
-        # Allow a few tool iterations
         trace = []
-        for _ in range(4):
+        for _ in range(6):  # allow retries for tool JSON compliance
             resp = self.llm.generate(messages)
-            trace.append({"backend": resp.used_backend, "text": resp.text})
-            tool_req = resp.tool_json
+
+            # sanitize & parse
+            raw_text = resp.text or ""
+            clean_text = strip_think(raw_text)
+            tool_req = self.llm._maybe_parse_tool(clean_text)
+
+            # model talked about tools but didn't send pure JSON? nudge and retry
+            if (tool_req is None) and looks_like_tool_intent(clean_text):
+                messages.append({
+                    "role": "system",
+                    "content": "REMINDER: If you need a tool, respond with a PURE JSON object ONLY. No other text."
+                })
+                continue
+
+            # execute tool call
             if tool_req:
                 try:
                     tool_result = self.tools.call(tool_req["tool_name"], tool_req["arguments"])
@@ -357,12 +367,16 @@ class Agent:
                     tool_result = {"ok": False, "error": str(e)}
                 messages.append({"role": "assistant", "content": json.dumps(tool_req)})
                 messages.append({"role": "tool", "content": json.dumps(tool_result)})
+                trace.append({"backend": resp.used_backend, "tool": tool_req, "result": tool_result})
                 continue
-            answer = resp.text.strip()
+
+            # final NL answer
+            answer = clean_text
             conf = self.estimate_confidence(answer)
             self.memory.add_agent_state(self.name, task_id, f"Answered: {query}", {"trace": trace})
             return {"agent": self.name, "answer": answer, "confidence": conf, "trace": trace}
 
+        # if loop exhausted
         answer = "I attempted tools but could not finalize a natural language answer."
         conf = 0.3
         self.memory.add_agent_state(self.name, task_id, f"Partial: {query}", {"trace": trace})
@@ -370,16 +384,16 @@ class Agent:
 
 class ResearchAgent(Agent):
     def is_relevant(self, query: str) -> float:
-        keys = ["find", "research", "look up", "discover", "papers", "info", "information", "recent"]
+        keys = ["find", "research", "look up", "discover", "papers", "info", "information", "recent", "news", "latest"]
         q = query.lower()
         score = 0.0
         if any(k in q for k in keys): score += 0.6
-        if any(w in q for w in ["transformer","reinforcement","neural","optimizer"]): score += 0.3
+        if any(w in q for w in ["transformer","reinforcement","neural","optimizer","architecture","paper"]): score += 0.3
         return min(1.0, score)
 
 class AnalysisAgent(Agent):
     def is_relevant(self, query: str) -> float:
-        keys = ["analyze", "compare", "trade-off", "efficiency", "which is better", "recommend", "calculate"]
+        keys = ["analyze", "compare", "trade-off", "efficiency", "which is better", "recommend", "calculate", "pros", "cons"]
         q = query.lower()
         score = 0.0
         if any(k in q for k in keys): score += 0.7
@@ -388,7 +402,7 @@ class AnalysisAgent(Agent):
 
 class MemoryAgent(Agent):
     def is_relevant(self, query: str) -> float:
-        keys = ["what did we learn", "earlier", "previous", "remember", "recall", "stored", "memory"]
+        keys = ["what did we learn", "earlier", "previous", "remember", "recall", "stored", "memory", "before", "summarize our"]
         q = query.lower()
         return 0.8 if any(k in q for k in keys) else 0.1
 
@@ -417,19 +431,18 @@ class Coordinator:
 
         # memory-first if explicitly recalling
         if any(isinstance(a, MemoryAgent) and a in eligible for a in self.agents) and \
-           ("memory" in q or "what did we learn" in q or "earlier" in q):
+           any(w in q for w in ["memory","what did we learn","earlier","previous","before","remember"]):
             plan.append(by_name.get("MemoryAgent"))
 
         if any(isinstance(a, ResearchAgent) and a in eligible for a in self.agents) and \
-           any(w in q for w in ["research","find","papers","information","info"]):
+           any(w in q for w in ["research","find","papers","information","info","latest","recent","news"]):
             plan.append(by_name.get("ResearchAgent"))
 
         if any(isinstance(a, AnalysisAgent) and a in eligible for a in self.agents) and \
-           any(w in q for w in ["analyze","compare","trade-off","recommend","which is better","efficiency"]):
+           any(w in q for w in ["analyze","compare","trade-off","recommend","which is better","efficiency","pros","cons"]):
             plan.append(by_name.get("AnalysisAgent"))
 
-        seen = set()
-        final = []
+        seen = set(); final = []
         for a in plan:
             if a and a not in seen:
                 final.append(a); seen.add(a)
@@ -483,6 +496,7 @@ class Coordinator:
             answers.append(ar)
 
         final_answer = self._synthesize(answers)
+        final_answer = strip_think(final_answer)  # final safety
         self.memory.add_conv("assistant", final_answer)
 
         if "analysis" in context:
@@ -501,9 +515,9 @@ class Coordinator:
         return "\n".join(buf)
 
 # =========================
-#   DI wiring
+#   DI wiring (incl. real OpenAI tool)
 # =========================
-def build_system() -> Tuple[Coordinator, ToolRegistry, MemoryLayer]:
+def build_system() -> Tuple['Coordinator', 'ToolRegistry', 'MemoryLayer']:
     embedder: Embedder = OllamaEmbedder(OLLAMA_EMBED_MODEL) if OLLAMA_EMBED_MODEL else TFIDFEmbedder()
     memory = MemoryLayer(embedder)
 
@@ -519,11 +533,42 @@ def build_system() -> Tuple[Coordinator, ToolRegistry, MemoryLayer]:
         return {"ok": True, "results": res}
     tools.register("memory_search", tool_memory_search, desc="Search memory (keyword/vector)")
 
-    # Agents
+    # REAL tool via ChatGPT (search/summarize)
+    def tool_openai_search(query: str, max_tokens: int = 300) -> Dict[str, Any]:
+        if not OPENAI_API_KEY:
+            return {"ok": False, "error": "OPENAI_API_KEY not set"}
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": OPENAI_MODEL,
+                    "temperature": 0.2,
+                    "max_tokens": max_tokens,
+                    "messages": [
+                        {"role": "system", "content": "You are a web research assistant. Summarize the most relevant, recent information for the given query."},
+                        {"role": "user", "content": query}
+                    ]
+                },
+                timeout=60,
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = data["choices"][0]["message"]["content"].strip()
+            return {"ok": True, "query": query, "answer": text}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    tools.register("openai_search", tool_openai_search, desc="Ask ChatGPT to fetch and summarize live information")
+
+    # Agent role prompts with decision policy
     policy = "\nDecision policy: Call a tool ONLY if it’s required to compute/lookup. If you already know, answer directly."
     research_prompt = (
         "You are ResearchAgent. Gather factual points and use tools when needed:\n"
-        "- mock_search(query, top_k)\n- memory_search(query, top_k, mode)\n"
+        "- openai_search(query, max_tokens)\n- mock_search(query, top_k)\n- memory_search(query, top_k, mode)\n"
     ) + policy
     analysis_prompt = (
         "You are AnalysisAgent. Compare options, compute, and recommend. Tools:\n"
@@ -534,7 +579,7 @@ def build_system() -> Tuple[Coordinator, ToolRegistry, MemoryLayer]:
         "- memory_search(query, top_k, mode)\n"
     ) + policy
 
-    llm = LLMRouter()
+    llm = LLMRouter(system_prompt=DEFAULT_SYSTEM_PREFIX)
     research_agent = ResearchAgent("ResearchAgent", research_prompt, llm, tools, memory)
     analysis_agent = AnalysisAgent("AnalysisAgent", analysis_prompt, llm, tools, memory)
     memory_agent  = MemoryAgent("MemoryAgent",  memory_prompt,  llm, tools, memory)
@@ -571,23 +616,91 @@ def run_scenarios():
             f.write("\n\nFinal:\n")
             f.write(res["final"])
 
-def interactive_chat():
+# =========================
+#   Main (chat default)
+# =========================
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Multi-Agent Chat (Ollama primary, optional ChatGPT fallback)")
+    parser.add_argument("--scenarios", action="store_true", help="Run built-in sample scenarios")
+    parser.add_argument("--chat", action="store_true", help="Interactive chat mode (default)")
+    parser.add_argument("--once", type=str, default="", help="Single-shot query (no prompt loop)")
+    parser.add_argument("--persist", action="store_true", help="Persist memory to ./state.json between runs")
+    parser.add_argument("--log", type=str, default="", help="Write JSONL chat log to this file")
+    args = parser.parse_args()
+
     coord, tools, memory = build_system()
-    print("Interactive chat. Type 'exit' to quit.")
+
+    # persistence
+    state_path = os.path.join(os.getcwd(), "state.json")
+    if args.persist and os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            memory.conversation = state.get("conversation", [])
+            memory.knowledge_base = state.get("knowledge_base", [])
+            memory.agent_state = state.get("agent_state", [])
+        except Exception as e:
+            print("Could not load state.json:", e)
+
+    def persist_now():
+        if args.persist:
+            try:
+                with open(state_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "conversation": memory.conversation,
+                        "knowledge_base": memory.knowledge_base,
+                        "agent_state": memory.agent_state
+                    }, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print("Persist error:", e)
+
+    # logging
+    log_fp = open(args.log, "a", encoding="utf-8") if args.log else None
+    def log_event(role, content, meta=None):
+        if log_fp:
+            rec = {"ts": now_ts(), "role": role, "content": content}
+            if meta: rec["meta"] = meta
+            log_fp.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            log_fp.flush()
+
+    # scenarios
+    if args.scenarios:
+        run_scenarios()
+        persist_now()
+        if log_fp: log_fp.close()
+        sys.exit(0)
+
+    # once
+    if args.once:
+        q = args.once.strip()
+        res = coord.handle_query(q)
+        print("\nAssistant:\n" + res["final"])
+        log_event("user", q)
+        log_event("assistant", res["final"], {"trace": res["trace"]})
+        persist_now()
+        if log_fp: log_fp.close()
+        sys.exit(0)
+
+    # default: interactive chat
+    print("Interactive chat (memory in-session{}). Type 'exit' to quit."
+          .format(" + persisted to state.json" if args.persist else ""))
+
     while True:
         try:
             q = input("\nYou: ").strip()
-            if q.lower() in ("exit", "quit"): break
+            if q.lower() in ("exit", "quit"):
+                break
+            log_event("user", q)
             res = coord.handle_query(q)
             print("\nAssistant:\n" + res["final"])
+            log_event("assistant", res["final"], {"trace": res["trace"]})
+            persist_now()
         except KeyboardInterrupt:
             break
         except Exception as e:
             print("Error:", e)
             traceback.print_exc()
 
-if __name__ == "__main__":
-    if "--chat" in sys.argv:
-        interactive_chat()
-    else:
-        run_scenarios()
+    if log_fp: log_fp.close()
