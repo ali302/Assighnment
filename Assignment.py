@@ -1,28 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 r"""
-Assignment.py — Multi-Agent Chat (Ollama primary + optional ChatGPT fallback) with Tool Calling, DI, Hybrid Agents, Vector Memory,
-interactive chat by default, and a real OpenAI-powered search tool.
+Assignment.py — Multi-Agent Chat (Ollama primary + optional ChatGPT fallback) with:
+- Tool Calling (pure-JSON), DI, Hybrid Agents
+- Vector Memory (TF-IDF by default; optional Ollama embeddings)
+- Interactive chat by default (scenarios behind --scenarios)
+- Real tool: openai_search (uses ChatGPT API if OPENAI_API_KEY is set)
+- Strict stripping of <think> blocks; banner shows "[thinking hidden]"
+- Title bar shows agent name(s) for every reply
+- UTC-safe timestamps; extended generation length
 
-Run:
-  # 1) install deps in the exact interpreter you use:
+Run (PowerShell):
   C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe -m pip install -r requirements.txt
-
-  # 2) ensure Ollama is running and model pulled
   ollama pull qwen3:4b
   $env:OLLAMA_MODEL="qwen3:4b"
+  # optional:
+  # $env:OPENAI_API_KEY="sk-proj-REGENERATED_KEY"
 
-  # 3) (optional) ChatGPT fallback + openai_search tool
-  $env:OPENAI_API_KEY="sk-proj-..."  # rotate/regenerate a new key!
-
-  # 4) start chat (default)
+  # interactive chat with memory persistence + logs:
   C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe .\Assignment.py --persist --log chat.jsonl
-
-  # or single-shot
-  C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe .\Assignment.py --once "what is a transformer?"
-
-  # or the original 5 demo scenarios
-  C:\Users\pc\AppData\Local\Microsoft\WindowsApps\python3.13.exe .\Assignment.py --scenarios
 """
 
 import os
@@ -56,10 +52,10 @@ DEFAULT_SYSTEM_PREFIX = (
   "TOOL CALLS:\n"
   "- If you need a tool, reply with a PURE JSON object ONLY: "
   "{\"tool_name\":\"<name>\",\"arguments\":{...}}. No surrounding text, no markdown, no commentary.\n"
-  "- If you are NOT calling a tool, reply with a short answer: 1 TL;DR sentence + up to 5 bullets.\n"
+  "- If you are NOT calling a tool, reply with: 1 TL;DR sentence + up to 5 bullets.\n"
   "HARD RULES:\n"
-  "- Never output chain-of-thought, analysis, or meta-reasoning. Do NOT output <think> blocks or inner thoughts. Think silently.\n"
-  "- Do not mention that you considered tools; either call them in JSON or answer briefly.\n"
+  "- Never output chain-of-thought or <think> blocks. Think silently; the UI will show a 'thinking hidden' banner if needed.\n"
+  "- Do not describe your intentions about tools; either call them in JSON or answer concisely.\n"
 )
 
 STYLE_GUIDE = (
@@ -84,8 +80,11 @@ def jprint(obj):
     print(json.dumps(obj, indent=2, ensure_ascii=False))
 
 def strip_think(text: str) -> str:
-    # remove <think>...</think> (any casing) if model leaks thoughts
+    """Remove any <think>...</think> blocks (case-insensitive)."""
     return re.sub(r'<think\b[^>]*>.*?</think>\s*', '', text, flags=re.DOTALL | re.IGNORECASE).strip()
+
+def had_think(text: str) -> bool:
+    return bool(re.search(r'<think\b', text, flags=re.IGNORECASE))
 
 def looks_like_tool_intent(text: str) -> bool:
     # model talked about tools but did not produce pure JSON
@@ -263,7 +262,7 @@ class OllamaLLM(BaseLLM):
                 "temperature": 0.1,
                 "top_p": 0.8,
                 "repeat_penalty": 1.05,
-                "num_predict": 256
+                "num_predict": 768  # extended to avoid truncation
             }
         }
         try:
@@ -343,16 +342,15 @@ class Agent:
         messages.append({"role": "user", "content": query})
 
         trace = []
-        for _ in range(6):  # allow retries for tool JSON compliance
+        for _ in range(8):  # allow retries for tool JSON compliance and finalization
             resp = self.llm.generate(messages)
 
-            # sanitize & parse
             raw_text = resp.text or ""
-            clean_text = strip_think(raw_text)
-            tool_req = self.llm._maybe_parse_tool(clean_text)
+            cleaned = strip_think(raw_text)
+            tool_req = self.llm._maybe_parse_tool(cleaned)
 
             # model talked about tools but didn't send pure JSON? nudge and retry
-            if (tool_req is None) and looks_like_tool_intent(clean_text):
+            if (tool_req is None) and looks_like_tool_intent(cleaned):
                 messages.append({
                     "role": "system",
                     "content": "REMINDER: If you need a tool, respond with a PURE JSON object ONLY. No other text."
@@ -370,17 +368,21 @@ class Agent:
                 trace.append({"backend": resp.used_backend, "tool": tool_req, "result": tool_result})
                 continue
 
-            # final NL answer
-            answer = clean_text
+            # ensure we have a non-empty final answer
+            if not cleaned or cleaned.strip() in ("{}", "[]"):
+                messages.append({"role":"system","content":"Do not include <think>. Provide the final answer now: TL;DR + up to 5 bullets."})
+                continue
+
+            answer = cleaned
             conf = self.estimate_confidence(answer)
             self.memory.add_agent_state(self.name, task_id, f"Answered: {query}", {"trace": trace})
-            return {"agent": self.name, "answer": answer, "confidence": conf, "trace": trace}
+            return {"agent": self.name, "answer": answer, "confidence": conf, "trace": trace, "had_think": had_think(raw_text)}
 
         # if loop exhausted
-        answer = "I attempted tools but could not finalize a natural language answer."
+        answer = "TL;DR: I couldn’t finalize a response.\n- Please rephrase or try again."
         conf = 0.3
         self.memory.add_agent_state(self.name, task_id, f"Partial: {query}", {"trace": trace})
-        return {"agent": self.name, "answer": answer, "confidence": conf, "trace": trace}
+        return {"agent": self.name, "answer": answer, "confidence": conf, "trace": trace, "had_think": True}
 
 class ResearchAgent(Agent):
     def is_relevant(self, query: str) -> float:
@@ -504,7 +506,17 @@ class Coordinator:
         elif "research" in context:
             self.memory.add_kb(topic="research", text=context["research"], source="coordinator", agent="Coordinator", confidence=0.6)
 
-        return {"task_id": task_id, "trace": trace, "answers": answers, "final": final_answer}
+        agent_names = "+".join(a.name for a in (call_chain if call_chain else self.agents)) if call_chain else "HybridAgent(All)"
+        thinking_flag = any(a.get("had_think") for a in answers)
+
+        return {
+            "task_id": task_id,
+            "trace": trace,
+            "answers": answers,
+            "final": final_answer,
+            "agent_names": agent_names,
+            "thinking_hidden": thinking_flag
+        }
 
     def _synthesize(self, parts: List[Dict[str, Any]]) -> str:
         if not parts: return "No answer produced."
@@ -512,7 +524,7 @@ class Coordinator:
         buf = ["SYNTHESIZED ANSWER (from {} agents):".format(len(parts))]
         for p in parts:
             buf.append(f"- [{p['agent']}] ({p['confidence']:.2f}): {p['answer']}")
-        return "\n".join(buf)
+        return strip_think("\n".join(buf))
 
 # =========================
 #   DI wiring (incl. real OpenAI tool)
@@ -617,6 +629,19 @@ def run_scenarios():
             f.write(res["final"])
 
 # =========================
+#   UI / Render
+# =========================
+def render_boxed(agent_names: str, thinking_hidden: bool, body: str):
+    banner = f"[ Agent: {agent_names} ]" + (" [thinking hidden]" if thinking_hidden else "")
+    # ensure a minimum padding
+    line_len = max(4, len(banner) + 1)
+    line = "═" * line_len
+    print(f"\n╔{line}╗")
+    print(f"║ {banner.ljust(line_len)}║")
+    print(f"╚{line}╝")
+    print(body)
+
+# =========================
 #   Main (chat default)
 # =========================
 if __name__ == "__main__":
@@ -676,9 +701,9 @@ if __name__ == "__main__":
     if args.once:
         q = args.once.strip()
         res = coord.handle_query(q)
-        print("\nAssistant:\n" + res["final"])
+        render_boxed(res.get("agent_names","Agent"), res.get("thinking_hidden", False), res["final"])
         log_event("user", q)
-        log_event("assistant", res["final"], {"trace": res["trace"]})
+        log_event("assistant", res["final"], {"trace": res["trace"], "agents": res.get("agent_names")})
         persist_now()
         if log_fp: log_fp.close()
         sys.exit(0)
@@ -694,8 +719,8 @@ if __name__ == "__main__":
                 break
             log_event("user", q)
             res = coord.handle_query(q)
-            print("\nAssistant:\n" + res["final"])
-            log_event("assistant", res["final"], {"trace": res["trace"]})
+            render_boxed(res.get("agent_names","Agent"), res.get("thinking_hidden", False), res["final"])
+            log_event("assistant", res["final"], {"trace": res["trace"], "agents": res.get("agent_names")})
             persist_now()
         except KeyboardInterrupt:
             break
