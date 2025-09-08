@@ -63,9 +63,6 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 BRIEF = os.environ.get("BRIEF", "1") == "1"
 
-
-
-
 DEFAULT_SYSTEM_PREFIX = (
   "You are a precise assistant.\n"
   "TOOL CALLS:\n"
@@ -437,9 +434,31 @@ class AnalysisAgent(Agent):
 
 class MemoryAgent(Agent):
     def is_relevant(self, query: str) -> float:
-        keys = ["what did we learn", "earlier", "previous", "remember", "recall", "stored", "memory", "before", "summarize our"]
         q = query.lower()
-        return 0.8 if any(k in q for k in keys) else 0.1
+
+        # Strong, explicit recall requests
+        strong_patterns = [
+            r"\bwhat\s+did\s+we\s+(?:discuss|talk|decide|agree|cover)\b",
+            r"\bwhat\s+did\s+we\s+learn\b",
+            r"\brecap\b",
+            r"\bsummar(?:y|ize|ise)\b",
+            r"\bremind\s+me\b",
+            r"\b(last|previous)\s+(?:chat|conversation|discussion|meeting)\b",
+            r"\bwhat\s+did\s+i\s+say\b",
+            r"\bwhat\s+did\s+you\s+say\b",
+        ]
+        # Weaker hints still about past context
+        weak_patterns = [
+            r"\bearlier\b", r"\bbefore\b", r"\bprevious\b",
+            r"\bremember\b", r"\brecall\b", r"\bmemory\b",
+            r"\bprior\b", r"\blast\s+time\b"
+        ]
+
+        if any(re.search(p, q) for p in strong_patterns):
+            return 0.95
+        if any(re.search(p, q) for p in weak_patterns):
+            return 0.70
+        return 0.10
 
 class HybridAgent(Agent):
     def __init__(self, name: str, agents: List[Agent], llm: BaseLLM):
@@ -464,10 +483,18 @@ class Coordinator:
         by_name = {a.name: a for a in eligible}
         plan: List[Agent] = []
 
-        # memory-first if explicitly recalling
-        if any(isinstance(a, MemoryAgent) and a in eligible for a in self.agents) and \
-           any(w in q for w in ["memory","what did we learn","earlier","previous","before","remember"]):
-            plan.append(by_name.get("MemoryAgent"))
+        # memory-first if explicitly recalling (regex for better coverage)
+        if any(isinstance(a, MemoryAgent) and a in eligible for a in self.agents):
+            mem_patterns = [
+                r"\bmemory\b", r"\brecap\b", r"\bsummar(?:y|ize|ise)\b", r"\bremind\s+me\b",
+                r"\bwhat\s+did\s+we\s+(?:discuss|talk|decide|agree|cover)\b",
+                r"\bwhat\s+did\s+we\s+learn\b",
+                r"\b(last|previous)\s+(?:chat|conversation|discussion|meeting)\b",
+                r"\bearlier\b", r"\bprevious\b", r"\bbefore\b", r"\bremember\b", r"\brecall\b",
+                r"\bwhat\s+did\s+i\s+say\b", r"\bwhat\s+did\s+you\s+say\b", r"\blast\s+time\b"
+            ]
+            if any(re.search(p, q) for p in mem_patterns):
+                plan.append(by_name.get("MemoryAgent"))
 
         if any(isinstance(a, ResearchAgent) and a in eligible for a in self.agents) and \
            any(w in q for w in ["research","find","papers","information","info","latest","recent","news"]):
@@ -658,7 +685,7 @@ SCENARIOS = [
     ("Complex Query", "Research transformer architectures, analyze their computational efficiency, and summarize key trade-offs."),
     ("Memory Test", "What did we discuss about neural networks earlier?"),
     ("Multi-step", "Find recent papers on reinforcement learning, analyze their methodologies, and identify common challenges."),
-    ("Collaborative", "Compare two machine-learning approaches and recommend which is better for our use case."),
+    ("Collaborative", "Compare two machine-learning approaches and recommend which is better for our use case. from What did we discuss about neural networks earlier? "),
 ]
 
 def run_scenarios():
